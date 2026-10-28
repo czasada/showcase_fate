@@ -2189,7 +2189,7 @@
     },
     "utf8": {
       "Source": "RSPM",
-      "Repository": "https://packages.intranet.omicscouts.com/cran/latest",
+      "Repository": "https://cran.r-project.org",
       "description": {
         "Package": "utf8",
         "Title": "Unicode Text Processing",
