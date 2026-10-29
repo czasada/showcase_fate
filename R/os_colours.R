@@ -13,12 +13,5 @@ os_colours_selected <- c(
 vehicle_colour <- "#C8C8C8"
 volcano_colours <- c(down = "#c40a4f", none = "#C8C8C8", up = "#11447b")
 
-stage_colours <- c(
-  planned = "#E6E6E6", acquired = "#76afe2", `QC failed` = "#C77E00",
-  `QC passed` = "#0864C7", analysed = "#11447b", reported = "#6C7A05"
-)
-
-condition_colours <- function(conditions) {
-  others <- setdiff(conditions, vehicle_name)
-  c(stats::setNames(vehicle_colour, vehicle_name), stats::setNames(os_colours_selected[seq_along(others)], others))
-}
+well_type_colours <- c(DMSO = vehicle_colour, `positive control` = "#c40a4f", compound = "#76afe2")
+run_status_colours <- c(passed = "#6C7A05", `flagged (below QC threshold)` = "#C77E00", planned = "#E6E6E6")

@@ -1,83 +1,115 @@
-# Proteins of interest (barplots section of the WP1 degradomics report): fold changes and
-# degradation efficiencies per sample, imputed values marked.
+# Proteins of interest: screen hits rolled up per protein (left) and the selected protein across all compounds
+# (right) as bubble, volcano or ranked view. Replaces the report's bar plots of selected proteins.
 
 mod_proteins_ui <- function(id) {
   ns <- NS(id)
-  layout_sidebar(
-    sidebar = sidebar(
-      title = "Proteins",
-      radioButtons(
-        ns("group"), "Preset",
-        c("Established neosubstrates" = "neo", "Regulated in any comparison" = "regulated", "Custom" = "custom")
+  layout_columns(
+    col_widths = c(5, 7),
+    card(
+      card_header("Proteins degraded by the screen", div(class = "ov-muted", textOutput(ns("summary"), inline = TRUE))),
+      checkboxGroupInput(
+        ns("categories"), NULL, unname(protein_categories),
+        selected = unname(protein_categories), inline = TRUE
       ),
-      selectizeInput(
-        ns("proteins"), "Proteins (max. 12)",
-        choices = NULL, multiple = TRUE, options = list(maxItems = 12)
-      ),
-      radioButtons(
-        ns("value"), "Show",
-        c("Log2 fold change" = "log2_fold_change", "Degradation efficiency" = "degradation_efficiency_percent")
-      ),
-      helpText("Regulated = significant under the cutoffs set on the Statistics tab. Open points are imputed values.")
+      DT::DTOutput(ns("targets")),
+      card_footer(
+        class = "ov-muted",
+        "Compounds = number of compounds degrading the protein (BH-adjusted p <= 0.05, at least 50 % reduction).",
+        "Best = strongest reduction. Category from the final table annotation."
+      )
     ),
     card(
       full_screen = TRUE,
-      card_header(textOutput(ns("title"))),
-      uiOutput(ns("bars_ui"))
+      uiOutput(ns("header")),
+      div(
+        class = "d-flex flex-wrap gap-3",
+        radioButtons(ns("view"), NULL, c("Bubble" = "bubble", "Volcano" = "volcano", "Ranked" = "ranked"),
+                     inline = TRUE),
+        radioButtons(ns("metric"), NULL, c("log2 FC" = "log2fc", "Reduction %" = "reduction",
+                                           "Remaining %" = "remaining"), inline = TRUE)
+      ),
+      p(class = "ov-muted", textOutput(ns("view_note"), inline = TRUE)),
+      plotly::plotlyOutput(ns("profile"), height = "480px")
     )
   )
 }
 
-mod_proteins_server <- function(id, proteins, fold_changes, regulated_stats, colours) {
+mod_proteins_server <- function(id, study) {
   moduleServer(id, function(input, output, session) {
-    gene_choices <- proteins %>%
-      dplyr::filter(protein_id %in% fold_changes$protein_id) %>%
-      dplyr::arrange(neosubstrate_category != "established", gene_name) %>%
-      dplyr::pull(gene_name)
-    updateSelectizeInput(session, "proteins", choices = gene_choices, server = TRUE)
+    stats <- annotated_statistics(study)
+    targets <- protein_targets(stats, study$identifier)
+    abundance <- abundance_rank(study)
+    annotation <- study$identifier %>%
+      dplyr::select(scout_id, gene_name, uniprot_id) %>%
+      dplyr::left_join(study$annotations, by = "scout_id")
 
-    preset_genes <- reactive({
-      switch(input$group,
-        neo = proteins$gene_name[proteins$neosubstrate_category == "established"],
-        regulated = regulated_stats() %>%
-          dplyr::filter(regulation != "none") %>%
-          dplyr::slice_min(p_value_uncorrected, n = 1, with_ties = FALSE, by = protein_id) %>%
-          dplyr::arrange(p_value_uncorrected) %>%
-          dplyr::pull(gene_name),
-        custom = NULL
+    output$summary <- renderText({
+      n_cat <- table(targets$category)
+      paste(
+        sprintf(
+          "%d proteins degraded by at least one compound (%d known neosubstrates, %d candidates);",
+          nrow(targets), n_cat[["known neosubstrate"]], n_cat[["candidate"]]
+        ),
+        "known first, then by number of compounds."
       )
     })
-    observeEvent(preset_genes(), {
-      if (input$group != "custom") {
-        updateSelectizeInput(
-          session, "proteins",
-          choices = gene_choices, selected = utils::head(preset_genes(), 12), server = TRUE
+
+    shown <- reactive(targets %>% dplyr::filter(category %in% input$categories))
+    output$targets <- DT::renderDT({
+      df <- shown() %>%
+        dplyr::transmute(
+          Protein = gene_name, UniProt = uniprot_id, Category = category,
+          Best = sprintf("%.0f %%", best_reduction), Compounds = n_compounds, `Best compound` = best_compound
         )
-      }
+      DT::datatable(
+        df,
+        rownames = FALSE, filter = "none", selection = list(mode = "single", selected = 1, target = "row"),
+        options = list(pageLength = 12, dom = "ftip", scrollX = TRUE, language = list(search = "Search gene or ID:"))
+      )
     })
 
-    output$title <- renderText({
-      if (input$value == "log2_fold_change") "Log2 fold change to mean DMSO" else "Degradation efficiency [%]"
+    protein_id <- reactive({
+      rows <- input$targets_rows_selected
+      table <- shown()
+      req(nrow(table) > 0)
+      if (length(rows) == 0) table$scout_id[1] else table$scout_id[rows[1]]
     })
+    profile <- reactive(protein_profile(stats, protein_id()))
+    mdc <- reactive(min_detectable_change(study, protein_id()))
 
-    output$bars_ui <- renderUI({
-      n_rows <- max(1, ceiling(length(input$proteins) / 3))
-      plotly::plotlyOutput(session$ns("bars"), height = paste0(260 * n_rows + 80, "px"))
-    })
-
-    output$bars <- plotly::renderPlotly({
-      validate(need(length(input$proteins) > 0, "Select at least one protein."))
-      df <- fold_changes %>%
-        dplyr::left_join(dplyr::select(proteins, protein_id, gene_name), by = "protein_id") %>%
-        dplyr::filter(gene_name %in% input$proteins) %>%
-        dplyr::mutate(gene_name = factor(gene_name, levels = input$proteins))
-      if (input$value == "log2_fold_change") {
-        poi_bar_plot(df, "log2_fold_change", "Log2 FC", colours, names(colours))
-      } else {
-        poi_bar_plot(
-          df, "degradation_efficiency_percent", "Degradation efficiency [%]", colours, names(colours), c(0, 100)
+    output$header <- renderUI({
+      info <- annotation %>% dplyr::filter(scout_id == protein_id())
+      rank <- abundance$top_percent[abundance$scout_id == protein_id()]
+      div(
+        h5(class = "mb-0", info$gene_name, span(class = "ov-muted", info$uniprot_id)),
+        div(
+          class = "ov-muted",
+          sprintf(
+            "%s · abundance rank: top %s %% · degraded by %d of %d compounds",
+            protein_categories[[info$neosubstrate_category]], if (length(rank) == 1) rank else "-",
+            sum(profile()$hit), nrow(profile())
+          )
         )
-      }
+      )
+    })
+    output$view_note <- renderText({
+      switch(input$view,
+        bubble = paste(
+          "One bubble per compound in ID order (plates shaded); red = hit; bubble size = how many proteins the",
+          "compound degrades in total, so small red bubbles are selective degraders. Min. detectable change =",
+          "2 x SD of this protein over the DMSO wells."
+        ),
+        volcano = "This protein in every compound: one point per compound, the strongest hits labelled.",
+        ranked = "The 25 compounds that reduce this protein most; red = hit."
+      )
+    })
+    output$profile <- plotly::renderPlotly({
+      req(input$view, input$metric)
+      switch(input$view,
+        bubble = protein_bubble_plot(profile(), input$metric, mdc()),
+        volcano = protein_volcano_plot(profile()),
+        ranked = protein_ranked_plot(profile(), input$metric, mdc())
+      )
     })
   })
 }
