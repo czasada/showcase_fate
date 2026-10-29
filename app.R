@@ -17,7 +17,7 @@ synthetic_banner <- div(
 )
 
 ui <- page_navbar(
-  title = "Degradomics screen - demo",
+  title = "ProteomeScout HT - showcase",
   theme = bs_theme(version = 5, primary = "#11447b", secondary = "#76afe2", danger = "#c40a4f"),
   fillable = FALSE,
   header = synthetic_banner,
