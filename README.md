@@ -1,4 +1,4 @@
-# Degradomics screen demo app
+# Fate
 
 Shiny + bslib dashboard on a synthetic 3 × 96-well degrader screen (seed 640). The app runs no analysis: at
 start-up it writes synthetic pipeline output to a temporary folder (one flat-header final table and sample annotation
